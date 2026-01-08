@@ -6,3 +6,9 @@ numpy
 opencv-python-headless
 requests
 python-dotenv
+huggingface_hub
+inputs
+transformers
+torch
+torchvision
+scikit-image
