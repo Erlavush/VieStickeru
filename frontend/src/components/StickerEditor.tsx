@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Eraser, Brush, Download, Check, X, Undo, Redo, ZoomIn, ZoomOut, Move } from 'lucide-react';
+import { Eraser, Brush, Download, Check, X, Undo, Redo, ZoomIn, ZoomOut, Move, Undo2, Redo2, Eye, Palette } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import axios from 'axios';
 
@@ -27,6 +27,13 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
   const [isMiddleMouseDown, setIsMiddleMouseDown] = useState(false);
+
+  // Undo/Redo History
+  const historyRef = useRef<ImageData[]>([]);
+  const [historyStep, setHistoryStep] = useState(0);
+
+  // Background Mode
+  const [bgMode, setBgMode] = useState<'checkerboard' | 'white' | 'black'>('checkerboard');
 
   // Load and Process Image
   const [version, setVersion] = useState(0);
@@ -62,6 +69,11 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         
         mCtx.drawImage(processedImg, 0, 0);
         setMaskCanvas(mCanvas);
+
+        // Initialize History
+        const initialData = mCtx.getImageData(0, 0, mCanvas.width, mCanvas.height);
+        historyRef.current = [initialData];
+        setHistoryStep(0);
         
         // Center initial view
         centerImage(img.width, img.height);
@@ -120,8 +132,16 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     // Clear
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw Checkerboard Background (for transparency reference)
-    drawCheckerboard(ctx, canvas.width, canvas.height);
+    // Draw Background
+    if (bgMode === 'checkerboard') {
+        drawCheckerboard(ctx, canvas.width, canvas.height);
+    } else if (bgMode === 'white') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (bgMode === 'black') {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
     ctx.save();
     // Apply Transform
@@ -151,7 +171,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     
     ctx.restore();
 
-  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize]); 
+  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize, bgMode]); 
 
   // Helper: Draw Checkerboard
   const drawCheckerboard = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
@@ -206,6 +226,11 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     setIsDragging(true);
     setLastPos({ x: screenX, y: screenY });
 
+    // We save history on Pointer UP (end of stroke), not down. 
+    // OR we can save "snapshot before start" if we want instant 'undo stroke'.
+    // Standard is: Current state is safe. We Modify it.
+    // Actually, capturing state on UP is easiest to ensure we capture the whole stroke.
+
     if (tool === 'erase' || tool === 'restore') {
         paint(x, y);
     }
@@ -240,6 +265,12 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     if ('button' in e && e.button === 1) {
         setIsMiddleMouseDown(false);
     }
+    
+    // If we were dragging and using an edit tool, save history
+    if (isDragging && (tool === 'erase' || tool === 'restore')) {
+        saveHistory();
+    }
+
     setIsDragging(false);
   };
 
@@ -315,6 +346,78 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     a.click();
     document.body.removeChild(a);
   };
+
+  // --- History Functions ---
+  const saveHistory = () => {
+    if (!maskCanvas) return;
+    const ctx = maskCanvas.getContext('2d');
+    if (!ctx) return;
+    
+    const data = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+    
+    // Slice if we are in middle of history
+    const newHistory = historyRef.current.slice(0, historyStep + 1);
+    newHistory.push(data);
+    
+    // Limit history size (optional, e.g. 50 steps)
+    if (newHistory.length > 50) {
+        newHistory.shift();
+    }
+    
+    historyRef.current = newHistory;
+    setHistoryStep(newHistory.length - 1);
+  };
+
+  const undo = () => {
+    if (historyStep <= 0 || !maskCanvas) return;
+    const newStep = historyStep - 1;
+    const data = historyRef.current[newStep];
+    const ctx = maskCanvas.getContext('2d');
+    if (ctx && data) {
+        ctx.putImageData(data, 0, 0);
+        setHistoryStep(newStep);
+        setVersion(v => v + 1); // Trigger Redraw
+    }
+  };
+
+  const redo = () => {
+    if (historyStep >= historyRef.current.length - 1 || !maskCanvas) return;
+    const newStep = historyStep + 1;
+    const data = historyRef.current[newStep];
+    const ctx = maskCanvas.getContext('2d');
+    if (ctx && data) {
+        ctx.putImageData(data, 0, 0);
+        setHistoryStep(newStep);
+        setVersion(v => v + 1);
+    }
+  };
+
+  // --- Keyboard Shortcuts ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        // Undo: Ctrl+Z or Cmd+Z
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+            e.preventDefault();
+            undo();
+        }
+        // Redo: Ctrl+Y or Ctrl+Shift+Z or Cmd+Shift+Z
+        if (((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z')))) {
+            e.preventDefault();
+            redo();
+        }
+        
+        // Brush Size: [ and ]
+        if (e.key === '[') {
+            setBrushSize(s => Math.max(5, s - 5));
+        }
+        if (e.key === ']') {
+            setBrushSize(s => Math.min(150, s + 5));
+        }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyStep, maskCanvas]);
 
   if (isProcessing) {
     return (
@@ -403,8 +506,48 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
                 )}
             </div>
 
-            {/* Bottom: Save */}
+            {/* Middle: Undo/Redo */}
+            <div className="flex flex-col gap-2">
+                 <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={undo}
+                    disabled={historyStep <= 0}
+                    className="text-zinc-500 hover:text-white disabled:opacity-30"
+                    title="Undo (Ctrl+Z)"
+                >
+                    <Undo2 className="w-5 h-5" />
+                </Button>
+                <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={redo}
+                    disabled={historyStep >= historyRef.current.length - 1}
+                    className="text-zinc-500 hover:text-white disabled:opacity-30"
+                    title="Redo (Ctrl+Y)"
+                >
+                    <Redo2 className="w-5 h-5" />
+                </Button>
+            </div>
+
+            {/* Bottom: Save & BG Toggle */}
             <div className="flex flex-col items-center space-y-4">
+                 
+                 {/* Background Toggle */}
+                 <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => {
+                        if (bgMode === 'checkerboard') setBgMode('white');
+                        else if (bgMode === 'white') setBgMode('black');
+                        else setBgMode('checkerboard');
+                    }}
+                    className="text-zinc-500 hover:text-white"
+                    title={`Background: ${bgMode}`}
+                >
+                    {bgMode === 'checkerboard' ? <Palette className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </Button>
+
                  <div className="flex flex-col items-center space-y-1 bg-zinc-950 p-1.5 rounded-lg border border-zinc-800">
                     <Button variant="ghost" size="icon" onClick={() => handleZoom(0.1)} className="h-6 w-6 text-zinc-400 hover:text-white"><ZoomIn className="w-3 h-3" /></Button>
                     <span className="text-[10px] text-zinc-500 font-mono">{Math.round(scale * 100)}%</span>
