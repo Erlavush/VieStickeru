@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Eraser, Brush, Download, Check, X, Undo, Redo, ZoomIn, ZoomOut, Move, Undo2, Redo2, Eye, Palette } from 'lucide-react';
+import { Eraser, Brush, Download, Check, X, Undo, Redo, ZoomIn, ZoomOut, Move, Undo2, Redo2, Eye, Palette, Image as ImageIcon, ImageOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import axios from 'axios';
 
@@ -27,6 +27,9 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
   const [isMiddleMouseDown, setIsMiddleMouseDown] = useState(false);
+  
+  // View Control
+  const [showReference, setShowReference] = useState(true);
 
   // Undo/Redo History
   const historyRef = useRef<ImageData[]>([]);
@@ -150,9 +153,11 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
 
     // Visual Render Strategy:
     // 1. Ghost Original (low opacity)
-    ctx.globalAlpha = 0.2;
-    ctx.drawImage(originalImage, 0, 0);
-    ctx.globalAlpha = 1.0;
+    if (showReference) {
+        ctx.globalAlpha = 0.2;
+        ctx.drawImage(originalImage, 0, 0);
+        ctx.globalAlpha = 1.0;
+    }
     
     // 2. Draw the Masked Result (Offscreen buffer)
     const buffer = document.createElement('canvas');
@@ -171,7 +176,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     
     ctx.restore();
 
-  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize, bgMode]); 
+  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize, bgMode, showReference]); 
 
   // Helper: Draw Checkerboard
   const drawCheckerboard = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
@@ -533,6 +538,17 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
             {/* Bottom: Save & BG Toggle */}
             <div className="flex flex-col items-center space-y-4">
                  
+                 {/* Toggle Reference Image (Ghost) */}
+                 <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setShowReference(!showReference)}
+                    className={cn("text-zinc-500 hover:text-white", showReference && "text-white bg-zinc-800")}
+                    title={showReference ? "Hide Original Guide" : "Show Original Guide"}
+                >
+                    {showReference ? <ImageIcon className="w-5 h-5" /> : <ImageOff className="w-5 h-5" />}
+                </Button>
+
                  {/* Background Toggle */}
                  <Button 
                     variant="ghost" 
