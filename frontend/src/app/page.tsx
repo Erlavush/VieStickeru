@@ -9,7 +9,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
 
   return (
-    <main className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <main className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 relative">
       {/* Background Ambience - Subtle Professional Glow */}
       <div className="absolute top-0 left-1/4 w-[800px] h-[800px] bg-violet-900/10 rounded-full blur-[100px] -translate-y-1/2 pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-indigo-900/10 rounded-full blur-[100px] translate-y-1/2 pointer-events-none" />
