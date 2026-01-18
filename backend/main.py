@@ -35,15 +35,25 @@ rmbg_pipe = pipeline("image-segmentation", model="briaai/RMBG-1.4", trust_remote
 
 @app.post("/api/remove-bg")
 async def remove_bg(file: UploadFile = File(...)):
+    with open("backend_debug.log", "a") as log:
+        log.write("Request received\n")
     try:
         # Read image bytes
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
+        with open("backend_debug.log", "a") as log:
+            log.write(f"Image loaded: {image.size}\n")
 
         # Process with Local Model
+        with open("backend_debug.log", "a") as log:
+            log.write("Starting inference...\n")
+        
         # The pipeline returns the mask or the final image depending on config.
         # For briaai/RMBG-1.4 pipeline, it typically handles the whole segmentation.
         result = rmbg_pipe(image)
+        
+        with open("backend_debug.log", "a") as log:
+            log.write("Inference done.\n")
         
         # 'result' usually is the segmented image (PIL Image) directly or a list.
         # Let's handle the output. Transformers image-segmentation usually returns a mask or marked image.
@@ -60,9 +70,13 @@ async def remove_bg(file: UploadFile = File(...)):
         sticker_transparent.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)
         
+        with open("backend_debug.log", "a") as log:
+            log.write("Response ready.\n")
+            
         return Response(content=img_byte_arr.getvalue(), media_type="image/png")
         
     except Exception as e:
+        with open("backend_debug.log", "a") as log:
+            log.write(f"Error: {e}\n")
         print(f"Server Error: {e}")
         return Response(content=f"Server Error: {str(e)}", status_code=500)
-

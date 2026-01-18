@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Eraser, Brush, Download, Check, X, Undo, Redo, ZoomIn, ZoomOut, Move, Undo2, Redo2, Eye, Palette, Image as ImageIcon, ImageOff } from 'lucide-react';
+import { Eraser, Brush, Download, X, Undo2, Redo2, Eye, Palette, Image as ImageIcon, ImageOff, Move, ZoomIn, ZoomOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import axios from 'axios';
 
@@ -35,10 +35,14 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     saturation: 100,
   });
 
+  // Border Settings
+  const [borderSize, setBorderSize] = useState(0);
+  const [borderColor, setBorderColor] = useState('#FFFFFF');
+  const [smoothness, setSmoothness] = useState(0);
+
   // Header Visibility
   const [showHeader, setShowHeader] = useState(false);
 
-  
   // View Control
   const [showReference, setShowReference] = useState(true);
 
@@ -59,6 +63,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         const formData = new FormData();
         formData.append('file', file);
 
+        // Uses the new RMBG-2.0 Endpoint
         const response = await axios.post('http://127.0.0.1:8000/api/remove-bg', formData, {
           responseType: 'blob',
         });
@@ -94,7 +99,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         
       } catch (error) {
         console.error("Error processing image:", error);
-        alert("Failed to process background removal.");
+        alert("Failed to process background removal. Ensure Backend is running.");
         onBack();
       } finally {
         setIsProcessing(false);
@@ -125,6 +130,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   };
 
   // Rendering Loop
+  const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
+
   useEffect(() => {
     if (!originalImage || !maskCanvas || !canvasRef.current) return;
     
@@ -136,7 +143,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         const newWidth = containerRef.current.clientWidth;
         const newHeight = containerRef.current.clientHeight;
         
-        // Only resize if significantly different to avoid constant redraws
         if (Math.abs(canvas.width - newWidth) > 10 || Math.abs(canvas.height - newHeight) > 10) {
             canvas.width = newWidth;
             canvas.height = newHeight;
@@ -162,8 +168,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     ctx.translate(offset.x, offset.y);
     ctx.scale(scale, scale);
 
-    // Visual Render Strategy:
-    
     // Filter String
     const filterStr = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`;
 
@@ -176,25 +180,51 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         ctx.restore();
     }
     
-    // 2. Draw the Masked Result (Offscreen buffer)
+    // 2. Prepare Buffer (Masked Image)
     const buffer = document.createElement('canvas');
     buffer.width = originalImage.width;
     buffer.height = originalImage.height;
     const bCtx = buffer.getContext('2d')!;
     
-    // Draw Mask onto buffer
+    // Draw Mask
     bCtx.drawImage(maskCanvas, 0, 0);
-    // Keep only the opaque parts of original
+    // Keep only opaque parts
     bCtx.globalCompositeOperation = 'source-in';
     bCtx.filter = filterStr;
     bCtx.drawImage(originalImage, 0, 0);
     
-    // Draw buffer to main canvas
+    // 3. Draw Buffer to Main Canvas with Effects
+    if (borderSize > 0) {
+        // Apply Sticker Border using SVG Filter
+        // We use the ID defined in the JSX below
+        ctx.filter = 'url(#sticker-border-effect)';
+    } else {
+        ctx.filter = 'none';
+    }
+    
     ctx.drawImage(buffer, 0, 0);
+
+    // Reset filter for cursor
+    ctx.filter = 'none';
+
+    // 4. Draw Brush Cursor
+    if (cursorPos && (tool === 'erase' || tool === 'restore')) {
+        ctx.beginPath();
+        ctx.arc(cursorPos.x, cursorPos.y, brushSize / 2, 0, Math.PI * 2);
+        ctx.lineWidth = 2 / scale; 
+        ctx.strokeStyle = 'white';
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.arc(cursorPos.x, cursorPos.y, brushSize / 2, 0, Math.PI * 2);
+        ctx.lineWidth = 1 / scale; 
+        ctx.strokeStyle = 'black';
+        ctx.stroke();
+    }
     
     ctx.restore();
 
-  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize, bgMode, showReference, adjustments]); 
+  }, [originalImage, maskCanvas, scale, offset, ToolTrigger, brushSize, bgMode, showReference, adjustments, cursorPos, tool, borderSize, borderColor]); 
 
   // Helper: Draw Checkerboard
   const drawCheckerboard = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
@@ -236,7 +266,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   };
 
   const handlePointerDown = (e: React.MouseEvent | React.TouchEvent) => {
-    // Middle mouse button for panning
     if ('button' in e && e.button === 1) {
         e.preventDefault();
         setIsMiddleMouseDown(true);
@@ -249,11 +278,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     setIsDragging(true);
     setLastPos({ x: screenX, y: screenY });
 
-    // We save history on Pointer UP (end of stroke), not down. 
-    // OR we can save "snapshot before start" if we want instant 'undo stroke'.
-    // Standard is: Current state is safe. We Modify it.
-    // Actually, capturing state on UP is easiest to ensure we capture the whole stroke.
-
     if (tool === 'erase' || tool === 'restore') {
         paint(x, y);
     }
@@ -261,8 +285,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
 
   const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
     const { x, y, screenX, screenY } = getLocalCoords(e);
+    setCursorPos({ x, y });
     
-    // Middle mouse panning
     if (isMiddleMouseDown) {
         e.preventDefault();
         const dx = screenX - lastPos.x;
@@ -289,21 +313,17 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         setIsMiddleMouseDown(false);
     }
     
-    // If we were dragging and using an edit tool, save history
     if (isDragging && (tool === 'erase' || tool === 'restore')) {
         saveHistory();
     }
-
     setIsDragging(false);
   };
 
   const paint = (x: number, y: number) => {
     if (!maskCanvas) return;
     const ctx = maskCanvas.getContext('2d')!;
-    
     ctx.beginPath();
     ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
-    
     if (tool === 'erase') {
         ctx.globalCompositeOperation = 'destination-out';
         ctx.fillStyle = 'rgba(0,0,0,1)';
@@ -313,14 +333,12 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         ctx.fillStyle = 'rgba(255, 255, 255, 1)';
         ctx.fill();
     }
-    
     setVersion(v => v + 1);
   };
 
   // Zoom Helpers
   const handleZoom = (delta: number, mouseX?: number, mouseY?: number) => {
     if (!canvasRef.current) return;
-    
     const newScale = Math.max(0.1, Math.min(5, scale + delta));
     
     if (mouseX !== undefined && mouseY !== undefined) {
@@ -333,63 +351,50 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
       
       const newOffsetX = canvasX - imageX * newScale;
       const newOffsetY = canvasY - imageY * newScale;
-      
       setOffset({ x: newOffsetX, y: newOffsetY });
     }
-    
     setScale(newScale);
   };
 
-  // Non-passive wheel listener to prevent default scrolling
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
     const onWheel = (e: WheelEvent) => {
         e.preventDefault();
         e.stopPropagation();
-
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        
-        // Logic from handleZoom inlined to ensure access to fresh state via deps
-        // Actually we can just call handleZoom if we depend on it
-        // handleZoom is defined above, but we need to ensure we have the latest closure variables (scale, offset)
-        // Since handleZoom captures state, we need to recreate this listener or use refs.
-        // Let's rely on re-binding:
-        
-        // We can't easily call handleZoom(delta, e.clientX, e.clientY) if handleZoom is stale.
-        // However, handleZoom depends on [scale, offset].
-        // So if we add [handleZoom] to useEffect deps, it will re-bind.
-        
-        // To be safe and clean, let's just impl here or call the stable function if wrapped in useCallback.
-        // For simplicity in this edit, I will call handleZoom, and add scale/offset to deps.
-       
-        // We need to calculate manually or call handleZoom.
-        // Let's call handleZoom.
         handleZoom(delta, e.clientX, e.clientY);
     };
-
     container.addEventListener('wheel', onWheel, { passive: false });
-    
-    return () => {
-        container.removeEventListener('wheel', onWheel);
-    };
-  }, [scale, offset]); // Re-bind when state changes to keep closure fresh
+    return () => container.removeEventListener('wheel', onWheel);
+  }, [scale, offset]); 
   
   const handleSave = () => {
     if (!originalImage || !maskCanvas) return;
     
     const outCanvas = document.createElement('canvas');
-    outCanvas.width = originalImage.width;
-    outCanvas.height = originalImage.height;
+    // Add extra padding to canvas for border
+    const padding = borderSize * 2; 
+    outCanvas.width = originalImage.width + padding;
+    outCanvas.height = originalImage.height + padding;
     const ctx = outCanvas.getContext('2d')!;
     
-    ctx.drawImage(maskCanvas, 0, 0);
-    ctx.globalCompositeOperation = 'source-in';
-    ctx.filter = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`;
-    ctx.drawImage(originalImage, 0, 0);
+    const buffer = document.createElement('canvas');
+    buffer.width = originalImage.width;
+    buffer.height = originalImage.height;
+    const bCtx = buffer.getContext('2d')!;
+    bCtx.drawImage(maskCanvas, 0, 0);
+    bCtx.globalCompositeOperation = 'source-in';
+    bCtx.filter = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`;
+    bCtx.drawImage(originalImage, 0, 0);
+
+    if (borderSize > 0) {
+        ctx.filter = 'url(#sticker-border-effect)';
+    }
+
+    // Center image in output with padding
+    ctx.drawImage(buffer, padding/2, padding/2);
     
-    // Use data URL to ensure filename is respected
     const dataUrl = outCanvas.toDataURL('image/png');
     const a = document.createElement('a');
     a.href = dataUrl;
@@ -404,18 +409,10 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     if (!maskCanvas) return;
     const ctx = maskCanvas.getContext('2d');
     if (!ctx) return;
-    
     const data = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-    
-    // Slice if we are in middle of history
     const newHistory = historyRef.current.slice(0, historyStep + 1);
     newHistory.push(data);
-    
-    // Limit history size (optional, e.g. 50 steps)
-    if (newHistory.length > 50) {
-        newHistory.shift();
-    }
-    
+    if (newHistory.length > 50) newHistory.shift();
     historyRef.current = newHistory;
     setHistoryStep(newHistory.length - 1);
   };
@@ -428,7 +425,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     if (ctx && data) {
         ctx.putImageData(data, 0, 0);
         setHistoryStep(newStep);
-        setVersion(v => v + 1); // Trigger Redraw
+        setVersion(v => v + 1);
     }
   };
 
@@ -447,26 +444,11 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   // --- Keyboard Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        // Undo: Ctrl+Z or Cmd+Z
-        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-            e.preventDefault();
-            undo();
-        }
-        // Redo: Ctrl+Y or Ctrl+Shift+Z or Cmd+Shift+Z
-        if (((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z')))) {
-            e.preventDefault();
-            redo();
-        }
-        
-        // Brush Size: [ and ]
-        if (e.key === '[') {
-            setBrushSize(s => Math.max(5, s - 5));
-        }
-        if (e.key === ']') {
-            setBrushSize(s => Math.min(150, s + 5));
-        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+        if (((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z')))) { e.preventDefault(); redo(); }
+        if (e.key === '[') setBrushSize(s => Math.max(5, s - 5));
+        if (e.key === ']') setBrushSize(s => Math.min(150, s + 5));
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [historyStep, maskCanvas]);
@@ -480,30 +462,32 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     );
   }
 
-
   return (
     <div className="flex flex-col h-[85vh] w-full relative bg-black overflow-hidden selection:bg-violet-500/30 rounded-3xl ring-1 ring-zinc-800 shadow-2xl my-8">
         
-        {/* --- Auto-Hide Header --- */}
-        <div 
-            className="absolute top-0 left-0 right-0 h-16 z-50 flex justify-center pointer-events-none"
-        >
-             {/* Trigger Zone */}
-             <div 
-                className="absolute top-0 left-0 right-0 h-4 pointer-events-auto"
-                onMouseEnter={() => setShowHeader(true)}
-             />
+        {/* SVG Filter Definition for Border */}
+        <svg style={{ position: 'absolute', width: 0, height: 0 }}>
+            <defs>
+                <filter id="sticker-border-effect">
+                    {/* Dilate Alpha Channel */}
+                    <feMorphology in="SourceAlpha" operator="dilate" radius={borderSize} result="dilated" />
+                    {/* Color the dilated result */}
+                    <feFlood floodColor={borderColor} result="color" />
+                    <feComposite in="color" in2="dilated" operator="in" result="outline" />
+                    {/* Merge Outline and Original */}
+                    <feMerge>
+                        <feMergeNode in="outline" />
+                        <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                </filter>
+            </defs>
+        </svg>
 
-             <div 
-                className={cn(
-                    "mt-2 px-6 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-full shadow-2xl flex items-center gap-4 transition-all duration-300 pointer-events-auto transform",
-                    showHeader ? "translate-y-0 opacity-100" : "-translate-y-[150%] opacity-0"
-                )}
-                onMouseLeave={() => setShowHeader(false)}
-             >
-                 <Button variant="ghost" size="icon" onClick={onBack} className="text-zinc-400 hover:text-white rounded-full">
-                     <X className="w-5 h-5" />
-                 </Button>
+        {/* --- Auto-Hide Header --- */}
+        <div className="absolute top-0 left-0 right-0 h-16 z-50 flex justify-center pointer-events-none">
+             <div className="absolute top-0 left-0 right-0 h-4 pointer-events-auto" onMouseEnter={() => setShowHeader(true)} />
+             <div className={cn("mt-2 px-6 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-full shadow-2xl flex items-center gap-4 transition-all duration-300 pointer-events-auto transform", showHeader ? "translate-y-0 opacity-100" : "-translate-y-[150%] opacity-0")} onMouseLeave={() => setShowHeader(false)}>
+                 <Button variant="ghost" size="icon" onClick={onBack} className="text-zinc-400 hover:text-white rounded-full"><X className="w-5 h-5" /></Button>
                  <span className="font-bold text-white tracking-tight">Sticker Studio</span>
                  <div className="w-px h-4 bg-zinc-800" />
                  <span className="text-xs text-zinc-500 font-mono">V 1.0</span>
@@ -511,85 +495,30 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
         </div>
 
         <div className="flex-1 flex flex-row h-full w-full overflow-hidden relative">
-            
             {/* --- Left Sidebar (Tools) --- */}
             <div className="w-20 bg-zinc-950 border-r border-zinc-900 flex flex-col items-center py-6 z-20 shrink-0 gap-6">
-                
-                {/* Tool Groups */}
                 <div className="flex flex-col items-center gap-4">
-                    <Button 
-                        variant={tool === 'pan' ? "default" : "ghost"}
-                        size="icon"
-                        onClick={() => setTool('pan')}
-                        className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'pan' ? "bg-violet-600 text-white shadow-lg shadow-violet-900/20" : "text-zinc-500 hover:text-white hover:bg-zinc-900")}
-                        title="Pan Tool"
-                    >
-                        <Move className="w-6 h-6" /> 
-                    </Button>
-
-                    <Button 
-                        variant={tool === 'erase' ? "default" : "ghost"}
-                        size="icon"
-                        onClick={() => setTool('erase')}
-                        className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'erase' ? "bg-white text-black shadow-lg shadow-white/10" : "text-zinc-500 hover:text-white hover:bg-zinc-900")}
-                        title="Erase"
-                    >
-                        <Eraser className="w-6 h-6" /> 
-                    </Button>
-
-                    <Button 
-                        variant={tool === 'restore' ? "default" : "ghost"}
-                        size="icon"
-                        onClick={() => setTool('restore')}
-                        className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'restore' ? "bg-white text-black shadow-lg shadow-white/10" : "text-zinc-500 hover:text-white hover:bg-zinc-900")}
-                        title="Restore"
-                    >
-                        <Brush className="w-6 h-6" /> 
-                    </Button>
+                    <Button variant={tool === 'pan' ? "default" : "ghost"} size="icon" onClick={() => setTool('pan')} className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'pan' ? "bg-violet-600 text-white shadow-lg shadow-violet-900/20" : "text-zinc-500 hover:text-white hover:bg-zinc-900")} title="Pan Tool"><Move className="w-6 h-6" /></Button>
+                    <Button variant={tool === 'erase' ? "default" : "ghost"} size="icon" onClick={() => setTool('erase')} className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'erase' ? "bg-white text-black shadow-lg shadow-white/10" : "text-zinc-500 hover:text-white hover:bg-zinc-900")} title="Erase"><Eraser className="w-6 h-6" /></Button>
+                    <Button variant={tool === 'restore' ? "default" : "ghost"} size="icon" onClick={() => setTool('restore')} className={cn("w-12 h-12 rounded-2xl transition-all", tool === 'restore' ? "bg-white text-black shadow-lg shadow-white/10" : "text-zinc-500 hover:text-white hover:bg-zinc-900")} title="Restore"><Brush className="w-6 h-6" /></Button>
                 </div>
-                
-                {/* Brush Size Slider (Compact) */}
                 {(tool === 'erase' || tool === 'restore') && (
                         <div className="flex flex-col items-center space-y-2 animate-in fade-in slide-in-from-left-4 duration-300 w-full px-2 relative group">
-                        
-                        {/* Restore Brush Preview */}
-                         <div className="absolute left-16 top-1/2 -translate-y-1/2 w-32 h-32 flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50">
-                            <div className="bg-zinc-950/80 backdrop-blur-md p-2 rounded-2xl border border-zinc-800 shadow-2xl">
-                                <div 
-                                    className="rounded-full border-2 border-white bg-white/20"
-                                    style={{ width: brushSize, height: brushSize }}
-                                />
-                                <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] text-white font-mono bg-zinc-900 px-2 py-0.5 rounded-full whitespace-nowrap">
-                                    {brushSize}px
+                             <div className="absolute left-16 top-1/2 -translate-y-1/2 w-32 h-32 flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50">
+                                <div className="bg-zinc-950/80 backdrop-blur-md p-2 rounded-2xl border border-zinc-800 shadow-2xl">
+                                    <div className="rounded-full border-2 border-white bg-white/20" style={{ width: brushSize, height: brushSize }} />
+                                    <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] text-white font-mono bg-zinc-900 px-2 py-0.5 rounded-full whitespace-nowrap">{brushSize}px</div>
                                 </div>
                             </div>
-                        </div>
-
-                        <div className="h-32 w-8 flex items-center justify-center bg-zinc-900/50 rounded-full border border-zinc-800 relative z-10 overflow-hidden">
-                                <div 
-                                    className="absolute bottom-0 w-full bg-violet-500/20 transition-all duration-75"
-                                    style={{ height: `${(brushSize / 150) * 100}%` }}
-                                />
-                                <input 
-                                type="range" 
-                                min="5" 
-                                max="150" 
-                                step="5"
-                                value={brushSize} 
-                                onChange={(e) => setBrushSize(Number(e.target.value))}
-                                className="w-full h-full opacity-0 cursor-pointer absolute inset-0 z-20 vertical-range"
-                                style={{ writingMode: 'vertical-lr', direction: 'rtl' }}
-                                title={`Brush Size: ${brushSize}`}
-                            />
-                            <div className="pointer-events-none z-0 w-1.5 h-1.5 rounded-full bg-white/50" />
-                        </div>
-                        <span className="text-[10px] text-zinc-600 font-mono">{brushSize}</span>
+                            <div className="h-32 w-8 flex items-center justify-center bg-zinc-900/50 rounded-full border border-zinc-800 relative z-10 overflow-hidden">
+                                    <div className="absolute bottom-0 w-full bg-violet-500/20 transition-all duration-75" style={{ height: `${(brushSize / 150) * 100}%` }} />
+                                    <input type="range" min="5" max="150" step="5" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full h-full opacity-0 cursor-pointer absolute inset-0 z-20 vertical-range" style={{ writingMode: 'vertical-lr', direction: 'rtl' }} title={`Brush Size: ${brushSize}`} />
+                                <div className="pointer-events-none z-0 w-1.5 h-1.5 rounded-full bg-white/50" />
+                            </div>
+                            <span className="text-[10px] text-zinc-600 font-mono">{brushSize}</span>
                         </div>
                 )}
-
                 <div className="flex-1" />
-
-                {/* History */}
                 <div className="flex flex-col gap-2">
                      <Button variant="ghost" size="icon" onClick={undo} disabled={historyStep <= 0} className="text-zinc-600 hover:text-white disabled:opacity-20"><Undo2 className="w-5 h-5" /></Button>
                      <Button variant="ghost" size="icon" onClick={redo} disabled={historyStep >= historyRef.current.length - 1} className="text-zinc-600 hover:text-white disabled:opacity-20"><Redo2 className="w-5 h-5" /></Button>
@@ -597,71 +526,19 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
             </div>
 
             {/* --- Main Content Area --- */}
-            <div className="flex-1 relative bg-zinc-950 overflow-hidden cursor-crosshair">
-                <div 
-                    ref={containerRef} 
-                    className="w-full h-full relative z-10"
-                    onMouseDown={handlePointerDown}
-                    onMouseMove={handlePointerMove}
-                    onMouseUp={handlePointerUp}
-                    onMouseLeave={(e) => {
-                        handlePointerUp(e);
-                        setIsHoveringCanvas(false);
-                    }}
-                    onMouseEnter={() => setIsHoveringCanvas(true)}
-                    onTouchStart={handlePointerDown}
-                    onTouchMove={handlePointerMove}
-                    onTouchEnd={handlePointerUp}
-
-                    onContextMenu={(e) => e.preventDefault()}
-                    style={{ touchAction: 'none' }}
-                >
-                        <div className="absolute inset-0 pointer-events-none opacity-[0.05]" 
-                            style={{ 
-                                backgroundImage: `
-                                    linear-gradient(to right, #404040 1px, transparent 1px),
-                                    linear-gradient(to bottom, #404040 1px, transparent 1px)
-                                `, 
-                                backgroundSize: '40px 40px' 
-                            }} 
-                        />
-
+            <div className="flex-1 relative bg-zinc-950 overflow-hidden">
+                <div ref={containerRef} className={cn("w-full h-full relative z-10 touch-none", (tool === 'erase' || tool === 'restore') ? 'cursor-none' : 'cursor-crosshair')} onMouseDown={handlePointerDown} onMouseMove={handlePointerMove} onMouseUp={handlePointerUp} onMouseLeave={(e) => { handlePointerUp(e); setIsHoveringCanvas(false); setCursorPos(null); }} onMouseEnter={() => setIsHoveringCanvas(true)} onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp} onContextMenu={(e) => e.preventDefault()} style={{ touchAction: 'none' }}>
+                     <div className="absolute inset-0 pointer-events-none opacity-[0.05]" style={{ backgroundImage: `linear-gradient(to right, #404040 1px, transparent 1px), linear-gradient(to bottom, #404040 1px, transparent 1px)`, backgroundSize: '40px 40px' }} />
                     <canvas ref={canvasRef} className="block w-full h-full" />
                 </div>
-                
-                {/* Info Bar */}
-             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 bg-zinc-900/80 backdrop-blur-md rounded-full border border-white/5 text-[10px] text-zinc-400 uppercase tracking-widest font-medium pointer-events-none">
-                Scroll to Zoom • Middle-Click Pan
-             </div>
-                {/* Bottom Center Controls (Zoom & View) */}
+             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 bg-zinc-900/80 backdrop-blur-md rounded-full border border-white/5 text-[10px] text-zinc-400 uppercase tracking-widest font-medium pointer-events-none">Scroll to Zoom • Middle-Click Pan</div>
                 <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 p-1.5 bg-zinc-900/90 backdrop-blur-md rounded-2xl border border-white/10 shadow-xl">
                     <Button variant="ghost" size="icon" onClick={() => handleZoom(-0.1)} className="h-8 w-8 text-zinc-400 hover:text-white rounded-lg"><ZoomOut className="w-4 h-4" /></Button>
                     <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span>
                     <Button variant="ghost" size="icon" onClick={() => handleZoom(0.1)} className="h-8 w-8 text-zinc-400 hover:text-white rounded-lg"><ZoomIn className="w-4 h-4" /></Button>
-                    
                     <div className="w-px h-4 bg-zinc-800 mx-1" />
-                    
-                    <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        onClick={() => setShowReference(!showReference)}
-                        className={cn("h-8 w-8 rounded-lg transition-colors", showReference ? "text-violet-400 bg-violet-500/10" : "text-zinc-500 hover:text-white")}
-                    >
-                        {showReference ? <ImageIcon className="w-4 h-4" /> : <ImageOff className="w-4 h-4" />}
-                    </Button>
-
-                    <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        onClick={() => {
-                            if (bgMode === 'checkerboard') setBgMode('white');
-                            else if (bgMode === 'white') setBgMode('black');
-                            else setBgMode('checkerboard');
-                        }}
-                        className="h-8 w-8 rounded-lg text-zinc-500 hover:text-white"
-                    >
-                        {bgMode === 'checkerboard' ? <Palette className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => setShowReference(!showReference)} className={cn("h-8 w-8 rounded-lg transition-colors", showReference ? "text-violet-400 bg-violet-500/10" : "text-zinc-500 hover:text-white")}>{showReference ? <ImageIcon className="w-4 h-4" /> : <ImageOff className="w-4 h-4" />}</Button>
+                    <Button variant="ghost" size="icon" onClick={() => { if (bgMode === 'checkerboard') setBgMode('white'); else if (bgMode === 'white') setBgMode('black'); else setBgMode('checkerboard'); }} className="h-8 w-8 rounded-lg text-zinc-500 hover:text-white">{bgMode === 'checkerboard' ? <Palette className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</Button>
                 </div>
             </div>
 
@@ -671,68 +548,63 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
                     <h3 className="text-white font-bold text-lg">Adjustments</h3>
                     <p className="text-zinc-500 text-xs mt-1">Refine your sticker look</p>
                 </div>
-
                 <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                    {/* Brightness */}
-                    <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                            <label className="text-xs font-medium text-zinc-300 uppercase tracking-wider">Brightness</label>
-                            <span className="text-xs text-zinc-500 font-mono">{adjustments.brightness}%</span>
+                     
+                     {/* Sticker Border Section */}
+                     <div className="space-y-4 pt-2">
+                        <label className="text-xs font-medium text-white uppercase tracking-wider flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-violet-500" /> Sticker Outline
+                        </label>
+                        <div className="bg-zinc-900/50 p-4 rounded-xl space-y-4 border border-zinc-800">
+                             {/* Size */}
+                             <div className="space-y-2">
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="text-zinc-400">Width</span>
+                                    <span className="text-zinc-500 font-mono">{borderSize}px</span>
+                                </div>
+                                <input type="range" min="0" max="50" step="1" value={borderSize} onChange={(e) => setBorderSize(Number(e.target.value))} className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500" />
+                             </div>
+                             {/* Color */}
+                             <div className="space-y-2">
+                                <span className="text-xs text-zinc-400">Color</span>
+                                <div className="flex flex-wrap gap-2">
+                                    {['#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#000000'].map((c) => (
+                                    <button key={c} onClick={() => setBorderColor(c)} className={cn("w-6 h-6 rounded-full border border-white/10 transition-transform hover:scale-110", borderColor === c ? "ring-2 ring-violet-500 scale-110" : "")} style={{ backgroundColor: c }} />
+                                    ))}
+                                    <div className="relative w-6 h-6 rounded-full overflow-hidden border border-white/10">
+                                        <input type="color" value={borderColor} onChange={(e) => setBorderColor(e.target.value)} className="absolute inset-0 w-[150%] h-[150%] -translate-x-1/4 -translate-y-1/4 p-0 border-0 cursor-pointer" />
+                                    </div>
+                                </div>
+                             </div>
                         </div>
-                        <input 
-                            type="range" 
-                            min="0" 
-                            max="200" 
-                            value={adjustments.brightness} 
-                            onChange={(e) => setAdjustments(prev => ({ ...prev, brightness: Number(e.target.value) }))}
-                            className="w-full accent-violet-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer hover:bg-zinc-700 transition-colors"
-                        />
-                    </div>
+                     </div>
 
-                    {/* Contrast */}
-                    <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                            <label className="text-xs font-medium text-zinc-300 uppercase tracking-wider">Contrast</label>
-                            <span className="text-xs text-zinc-500 font-mono">{adjustments.contrast}%</span>
-                        </div>
-                        <input 
-                            type="range" 
-                            min="0" 
-                            max="200" 
-                            value={adjustments.contrast} 
-                            onChange={(e) => setAdjustments(prev => ({ ...prev, contrast: Number(e.target.value) }))}
-                            className="w-full accent-violet-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer hover:bg-zinc-700 transition-colors"
-                        />
-                    </div>
+                    <div className="w-full h-px bg-zinc-900" />
 
-                    {/* Saturation */}
-                    <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                            <label className="text-xs font-medium text-zinc-300 uppercase tracking-wider">Saturation</label>
-                            <span className="text-xs text-zinc-500 font-mono">{adjustments.saturation}%</span>
+                    {/* Image Controls */}
+                    <div className="space-y-4">
+                        <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Image Filter</label>
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <div className="flex justify-between items-center"><span className="text-xs text-zinc-400">Brightness</span><span className="text-xs text-zinc-600 font-mono">{adjustments.brightness}%</span></div>
+                                <input type="range" min="0" max="200" value={adjustments.brightness} onChange={(e) => setAdjustments(prev => ({ ...prev, brightness: Number(e.target.value) }))} className="w-full accent-zinc-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                            <div className="space-y-2">
+                                <div className="flex justify-between items-center"><span className="text-xs text-zinc-400">Contrast</span><span className="text-xs text-zinc-600 font-mono">{adjustments.contrast}%</span></div>
+                                <input type="range" min="0" max="200" value={adjustments.contrast} onChange={(e) => setAdjustments(prev => ({ ...prev, contrast: Number(e.target.value) }))} className="w-full accent-zinc-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                            <div className="space-y-2">
+                                <div className="flex justify-between items-center"><span className="text-xs text-zinc-400">Saturation</span><span className="text-xs text-zinc-600 font-mono">{adjustments.saturation}%</span></div>
+                                <input type="range" min="0" max="200" value={adjustments.saturation} onChange={(e) => setAdjustments(prev => ({ ...prev, saturation: Number(e.target.value) }))} className="w-full accent-zinc-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer" />
+                            </div>
                         </div>
-                        <input 
-                            type="range" 
-                            min="0" 
-                            max="200" 
-                            value={adjustments.saturation} 
-                            onChange={(e) => setAdjustments(prev => ({ ...prev, saturation: Number(e.target.value) }))}
-                            className="w-full accent-violet-500 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer hover:bg-zinc-700 transition-colors"
-                        />
                     </div>
                 </div>
-
                 <div className="p-6 border-t border-zinc-900 bg-zinc-950/50">
-                    <Button 
-                        onClick={handleSave} 
-                        className="w-full h-12 bg-white text-black hover:bg-zinc-200 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-xl shadow-white/5 active:scale-95"
-                    >
-                        <Download className="w-5 h-5" /> Download Sticker
-                    </Button>
+                    <Button onClick={handleSave} className="w-full h-12 bg-white text-black hover:bg-zinc-200 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-xl shadow-white/5 active:scale-95"><Download className="w-5 h-5" /> Download Sticker</Button>
                 </div>
             </div>
         </div>
     </div>
   );
 }
-
