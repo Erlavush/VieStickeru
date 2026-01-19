@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:all": "concurrently \"npm run dev\" \"cd ../backend && uvicorn main:app --host 127.0.0.1 --port 8000 --reload\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -14,7 +15,6 @@
     "axios": "^1.13.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "framer-motion": "^12.23.26",
     "lucide-react": "^0.562.0",
     "next": "16.1.1",
     "postcss": "^8.5.6",
@@ -28,8 +28,10 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
+    "framer-motion": "^12.27.0",
     "typescript": "^5"
   }
 }

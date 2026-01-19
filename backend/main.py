@@ -33,6 +33,10 @@ print(f"Using Device: {'GPU (CUDA)' if device == 0 else 'CPU'}")
 # Initialize the pipeline
 rmbg_pipe = pipeline("image-segmentation", model="briaai/RMBG-1.4", trust_remote_code=True, device=device)
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "message": "Backend is running"}
+
 @app.post("/api/remove-bg")
 async def remove_bg(file: UploadFile = File(...)):
     with open("backend_debug.log", "a") as log:
