@@ -44,14 +44,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
   const [borderColor, setBorderColor] = useState('#FFFFFF');
   const [smoothness, setSmoothness] = useState(0);
 
-  // Shadow Settings
-  const [useShadow, setUseShadow] = useState(false);
-  const [shadowColor, setShadowColor] = useState('#000000');
-  const [shadowBlur, setShadowBlur] = useState(10);
-  const [shadowOffset, setShadowOffset] = useState({ x: 0, y: 5 });
 
   // Export Settings
-  const [autoCrop, setAutoCrop] = useState(true);
   const [exportFormat, setExportFormat] = useState<'png' | 'webp'>('png');
 
   // Header Visibility
@@ -218,6 +212,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     
     // 2. Prepare Buffer (Masked Image)
     const buffer = document.createElement('canvas');
+    buffer.width = originalImage.width;
+    buffer.height = originalImage.height;
     const bCtx = buffer.getContext('2d')!;
     
     // Draw Mask with Smoothing (Blur then threshold if needed, for now just blur alpha)
@@ -412,9 +408,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     if (!originalImage || !maskCanvas) return;
     
     const outCanvas = document.createElement('canvas');
-    // Add extra padding to canvas for border and shadow
-    const shadowPad = useShadow ? shadowBlur + Math.max(Math.abs(shadowOffset.x), Math.abs(shadowOffset.y)) : 0;
-    const padding = (borderSize * 2) + (shadowPad * 2) + 20; // 20px extra safety
+    // Add extra padding to canvas for border
+    const padding = (borderSize * 2) + 20; // 20px extra safety
     
     outCanvas.width = originalImage.width + padding;
     outCanvas.height = originalImage.height + padding;
@@ -436,13 +431,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     bCtx.filter = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`;
     bCtx.drawImage(originalImage, 0, 0);
 
-    // Apply Drop Shadow to Context before drawing
-    if (useShadow) {
-        ctx.shadowColor = shadowColor;
-        ctx.shadowBlur = shadowBlur;
-        ctx.shadowOffsetX = shadowOffset.x;
-        ctx.shadowOffsetY = shadowOffset.y;
-    }
 
     if (borderSize > 0) {
         ctx.filter = 'url(#sticker-border-effect)';
@@ -453,16 +441,8 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     const drawY = padding / 2;
     ctx.drawImage(buffer, drawX, drawY);
     
-    // Reset filters
-    ctx.shadowColor = 'transparent';
-    ctx.filter = 'none';
 
-    // Auto Crop Logic
-    let finalCanvas = outCanvas;
-    if (autoCrop) {
-        const cropped = performAutoCrop(outCanvas);
-        if (cropped) finalCanvas = cropped;
-    }
+    const finalCanvas = outCanvas;
 
     if (copyToClipboard) {
         finalCanvas.toBlob(async (blob) => {
@@ -492,44 +472,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
     }
   };
 
-  const performAutoCrop = (sourceCanvas: HTMLCanvasElement) => {
-    const ctx = sourceCanvas.getContext('2d');
-    if (!ctx) return null;
-    const w = sourceCanvas.width;
-    const h = sourceCanvas.height;
-    const data = ctx.getImageData(0, 0, w, h).data;
-    
-    let minX = w, minY = h, maxX = 0, maxY = 0;
-    let found = false;
-    
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const alpha = data[(y * w + x) * 4 + 3];
-            if (alpha > 0) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-                found = true;
-            }
-        }
-    }
-    
-    if (!found) return null;
-    
-    const cropWidth = maxX - minX + 1;
-    const cropHeight = maxY - minY + 1;
-    // Add small padding
-    const p = 10; 
-    
-    const cropCanvas = document.createElement('canvas');
-    cropCanvas.width = cropWidth + p * 2;
-    cropCanvas.height = cropHeight + p * 2;
-    const cropCtx = cropCanvas.getContext('2d')!;
-    
-    cropCtx.drawImage(sourceCanvas, minX, minY, cropWidth, cropHeight, p, p, cropWidth, cropHeight);
-    return cropCanvas;
-  };
 
   // --- History Functions ---
   const saveHistory = () => {
@@ -764,36 +706,6 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
                         </div>
                      </div>
                      
-                     {/* Drop Shadow Section */}
-                     <div className="space-y-4">
-                        <label className="text-xs font-medium text-white uppercase tracking-wider flex items-center gap-2 justify-between cursor-pointer" onClick={() => setUseShadow(!useShadow)}>
-                            <div className="flex items-center gap-2"><div className={cn("w-1.5 h-1.5 rounded-full", useShadow ? "bg-violet-500 animate-pulse" : "bg-zinc-700")} /> Drop Shadow</div>
-                            {useShadow ? <ChevronDown className="w-3 h-3 text-zinc-500" /> : <ChevronUp className="w-3 h-3 text-zinc-500" />}
-                        </label>
-                        
-                        <AnimatePresence>
-                        {useShadow && (
-                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                                <div className="bg-zinc-900/50 p-4 rounded-xl space-y-4 border border-zinc-800">
-                                      <div className="space-y-2">
-                                        <div className="flex justify-between items-center text-xs text-zinc-400"><span>Blur</span><span>{shadowBlur}px</span></div>
-                                        <input type="range" min="0" max="50" value={shadowBlur} onChange={(e) => setShadowBlur(Number(e.target.value))} className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500" />
-                                      </div>
-                                      <div className="space-y-2">
-                                        <div className="flex justify-between items-center text-xs text-zinc-400"><span>Y Offset</span><span>{shadowOffset.y}px</span></div>
-                                        <input type="range" min="-50" max="50" value={shadowOffset.y} onChange={(e) => setShadowOffset(prev => ({ ...prev, y: Number(e.target.value) }))} className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500" />
-                                      </div>
-                                       <div className="space-y-2">
-                                            <span className="text-xs text-zinc-400">Shadow Color</span>
-                                            <div className="flex gap-2">
-                                                <input type="color" value={shadowColor} onChange={(e) => setShadowColor(e.target.value)} className="w-full h-6 rounded cursor-pointer bg-transparent" />
-                                            </div>
-                                      </div>
-                                </div>
-                            </motion.div>
-                        )}
-                        </AnimatePresence>
-                     </div>
 
                     <div className="w-full h-px bg-zinc-900" />
 
@@ -819,13 +731,7 @@ export function StickerEditor({ file, onBack }: StickerEditorProps) {
                 <div className="p-6 border-t border-zinc-900 bg-zinc-950/50 space-y-3">
                     {/* Export Settings */}
                     <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
-                        <label className="flex items-center gap-2 cursor-pointer hover:text-white transition-colors">
-                            <div className={cn("w-3 h-3 border border-zinc-600 rounded-sm flex items-center justify-center transition-colors", autoCrop ? "bg-violet-500 border-violet-500" : "")}>
-                                {autoCrop && <CheckCircle2 className="w-2.5 h-2.5 text-white" />}
-                            </div>
-                            Auto-Crop
-                            <input type="checkbox" checked={autoCrop} onChange={(e) => setAutoCrop(e.target.checked)} className="hidden" />
-                        </label>
+                        <span />
                         <div className="flex bg-zinc-900 rounded-lg p-0.5">
                             <button onClick={() => setExportFormat('png')} className={cn("px-2 py-0.5 rounded-md text-[10px] font-medium transition-all", exportFormat === 'png' ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300")}>PNG</button>
                             <button onClick={() => setExportFormat('webp')} className={cn("px-2 py-0.5 rounded-md text-[10px] font-medium transition-all", exportFormat === 'webp' ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300")}>WEBP</button>
